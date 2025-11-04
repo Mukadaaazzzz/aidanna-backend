@@ -23,15 +23,13 @@ origins = [
     "https://aidanna.com",  # if you deploy frontend later
 ]
 
-# --- Enable CORS (important for frontend access) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # for dev; restrict later for prod
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # --- Mode definitions ---
 MODE_DEFINITIONS = {
     "narrative": {
