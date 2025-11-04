@@ -12,13 +12,28 @@ from typing import List, Optional, Dict, Any
 
 load_dotenv()
 
+
+
 # --- Config & client ---
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_KEY:
     raise RuntimeError("OPENAI_API_KEY is missing. Set it in environment or .env")
 
 client = OpenAI(api_key=OPENAI_KEY)
+
+
+
+
 app = FastAPI(title="Aidanna AI - Story Learning API")
+
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Mode definitions (exposed by /modes) ---
 MODE_DEFINITIONS = {
