@@ -33,7 +33,7 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
-    
+
 # --- Mode definitions ---
 MODE_DEFINITIONS = {
     "narrative": {
@@ -154,3 +154,10 @@ async def generate(request: GenerateRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    port = int(os.environ.get("PORT", 8000))  # Railway sets PORT automatically
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
