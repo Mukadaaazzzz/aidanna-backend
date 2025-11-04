@@ -17,6 +17,12 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 app = FastAPI(title="Aidanna AI - Story Learning API")
 
+origins = [
+    "https://animated-space-barnacle-q774r76jq4wv34v7p-3000.app.github.dev",
+    "http://localhost:3000",
+    "https://aidanna.com",  # if you deploy frontend later
+]
+
 # --- Enable CORS (important for frontend access) ---
 app.add_middleware(
     CORSMiddleware,
