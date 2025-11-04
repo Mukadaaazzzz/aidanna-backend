@@ -1,99 +1,148 @@
-# main.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, conint
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
-from typing import Optional, Dict, Any
+import time
+from typing import Optional, Dict, Any, List
 
+# --- Load environment ---
 load_dotenv()
 
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_KEY:
-    raise RuntimeError("OPENAI_API_KEY is missing")
+    raise RuntimeError("❌ OPENAI_API_KEY missing in environment or .env file")
 
 client = OpenAI(api_key=OPENAI_KEY)
-
 app = FastAPI(title="Aidanna AI - Story Learning API")
 
+# --- Enable CORS (important for frontend access) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # for dev; restrict later for prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- Mode definitions ---
 MODE_DEFINITIONS = {
     "narrative": {
         "label": "Narrative",
-        "description": "Single storyline with characters and scenes",
+        "description": "Teaches concepts through immersive stories with characters and plot.",
     },
     "dialogue": {
         "label": "Dialogue",
-        "description": "A conversational play between characters",
+        "description": "Explains through a conversation between characters.",
     },
     "case-study": {
         "label": "Case Study",
-        "description": "Real-world scenario breakdown",
+        "description": "Breaks down a real-world scenario with lessons learned.",
     },
     "interactive": {
         "label": "Interactive",
-        "description": "Choose-your-own-adventure style",
-    }
+        "description": "Lets users choose paths with consequences and learning points.",
+    },
 }
 
+# --- Pydantic models ---
+class Personalization(BaseModel):
+    tone: Optional[str] = None
+    characters: Optional[conint(ge=1, le=10)] = None
+    setting: Optional[str] = None
+    length: Optional[str] = None
+    extra_instructions: Optional[str] = None
+
+
 class GenerateRequest(BaseModel):
-    prompt: str = Field(default="Teach me something interesting")
-    mode: str = Field(default="narrative")
-    temperature: Optional[float] = Field(default=0.8)
-    max_tokens: Optional[int] = Field(default=800)
+    mode: str
+    prompt: str
+    personalization: Optional[Personalization] = None
+    temperature: Optional[float] = Field(0.8, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(800, ge=64, le=2000)
 
-def build_system_prompt(mode: str) -> str:
-    prompts = {
-        "narrative": "You are Aidanna, a warm learning companion who creates captivating narrative stories to teach concepts.",
-        "dialogue": "You are Aidanna, a creative learning companion who teaches through dialogue between characters.",
-        "case-study": "You are Aidanna, an insightful learning companion. Produce real-world case studies with analysis and takeaways.",
-        "interactive": "You are Aidanna, an interactive learning companion. Present scenarios with clear choices and consequences."
+
+# --- Helper functions ---
+def build_system_prompt(mode: str, personalization: Optional[Personalization]) -> str:
+    """Build system instruction depending on mode and personalization."""
+    base_prompts = {
+        "narrative": (
+            "You are Aidanna, a warm and inspiring AI teacher who explains topics "
+            "through captivating short stories with clear morals and insights."
+        ),
+        "dialogue": (
+            "You are Aidanna, a curious and engaging teacher who uses dialogues "
+            "between characters to explore ideas naturally."
+        ),
+        "case-study": (
+            "You are Aidanna, an analytical yet relatable teacher who presents lessons "
+            "through real or fictional case studies and outcomes."
+        ),
+        "interactive": (
+            "You are Aidanna, an interactive AI tutor who lets learners make choices "
+            "and explains the consequences for each decision."
+        ),
     }
-    return prompts.get(mode, prompts["narrative"])
 
+    base = base_prompts.get(mode, base_prompts["narrative"])
+    parts = [base]
+
+    if personalization:
+        if personalization.tone:
+            parts.append(f"Tone: {personalization.tone}.")
+        if personalization.setting:
+            parts.append(f"Setting: {personalization.setting}.")
+        if personalization.characters:
+            parts.append(f"Include about {personalization.characters} characters.")
+        if personalization.length:
+            parts.append(f"Keep the story {personalization.length} in length.")
+        if personalization.extra_instructions:
+            parts.append(f"Extra instructions: {personalization.extra_instructions}")
+
+    return " ".join(parts)
+
+
+# --- Routes ---
 @app.get("/")
-async def root():
-    return {"message": "Aidanna API is running", "status": "healthy"}
+def root():
+    return {"message": "Aidanna API is running 🚀", "endpoints": ["/modes", "/generate"]}
+
 
 @app.get("/modes")
-async def get_modes():
+def get_modes():
+    """Return supported learning modes."""
     return MODE_DEFINITIONS
 
-@app.post("/generate")
-async def generate(req: GenerateRequest):
-    mode = req.mode
-    if mode not in MODE_DEFINITIONS:
-        raise HTTPException(status_code=400, detail="Unsupported mode")
 
+@app.post("/generate")
+async def generate(request: GenerateRequest):
+    """Main endpoint: Generate educational story using selected mode."""
     try:
-        system_prompt = build_system_prompt(mode)
-        
+        system_prompt = build_system_prompt(request.mode, request.personalization)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.prompt},
+        ]
+
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": req.prompt}
-            ],
-            temperature=req.temperature,
-            max_tokens=req.max_tokens,
+            messages=messages,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
         )
 
-        content = completion.choices[0].message.content
-        
+        message = completion.choices[0].message.content
+
         return {
-            "id": completion.id,
-            "mode": mode,
-            "content": content,
-            "metadata": {}
+            "id": getattr(completion, "id", str(time.time())),
+            "mode": request.mode,
+            "response": message,
+            "metadata": {
+                "usage": getattr(completion, "usage", {}),
+            },
         }
+
     except Exception as e:
-        print(f"Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"OpenAI error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
