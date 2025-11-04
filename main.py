@@ -20,16 +20,20 @@ app = FastAPI(title="Aidanna AI - Story Learning API")
 origins = [
     "https://animated-space-barnacle-q774r76jq4wv34v7p-3000.app.github.dev",
     "http://localhost:3000",
-    "https://aidanna.com",  # if you deploy frontend later
+    "https://aidanna.com", 
+    "*"
+     # if you deploy frontend later
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    """Railway sometimes strips middleware headers; this ensures all responses include CORS."""
+    response: Response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+    
 # --- Mode definitions ---
 MODE_DEFINITIONS = {
     "narrative": {
