@@ -11,8 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the app
 COPY . .
 
-# Expose the port (optional but helpful)
+# Expose port (Railway will override with $PORT)
 EXPOSE 8000
 
-# Start the FastAPI app
-CMD ["python", "main.py"]
+# Use shell form to allow $PORT env var substitution
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
