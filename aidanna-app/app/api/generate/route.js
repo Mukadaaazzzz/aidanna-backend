@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -31,7 +37,10 @@ export async function POST(request) {
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
         { error: "OPENAI_API_KEY not configured on the server." },
-        { status: 500 }
+        { 
+          status: 500,
+          headers: corsHeaders
+        }
       );
     }
 
@@ -54,16 +63,24 @@ export async function POST(request) {
       mode: mode,
       response: message,
       metadata: { usage: completion.usage || {} },
+    }, {
+      headers: corsHeaders
     });
   } catch (error) {
     console.error('API Error:', error);
     return NextResponse.json(
       { error: error.message },
-      { status: 500 }
+      { 
+        status: 500,
+        headers: corsHeaders
+      }
     );
   }
 }
 
 export async function OPTIONS() {
-  return new NextResponse(null, { status: 200 });
+  return new NextResponse(null, {
+    status: 200,
+    headers: corsHeaders
+  });
 }
