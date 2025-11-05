@@ -119,8 +119,12 @@ async def generate(req: GenerateRequest):
         # Always JSON back so the browser sees the message
         raise HTTPException(status_code=500, detail=str(e))
 
-# At the end of main.py
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+```
+
+Then in Railway settings, set start command to:
+```
+python main.py
