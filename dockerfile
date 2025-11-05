@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8080
-
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Don't use EXPOSE - Railway ignores it
+# Just start uvicorn directly with Railway's PORT
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT
