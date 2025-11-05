@@ -27,6 +27,7 @@ app.add_middleware(
         "http://localhost:3000",
         "https://animated-space-barnacle-q774r76jq4wv34v7p-3000.app.github.dev",
         "https://aidanna.com",
+        "https://aidanna-backend-production.up.railway.app",  # Add this
     ],
     allow_origin_regex=r"^https://.*\.app\.github\.dev$",
     allow_credentials=True,
