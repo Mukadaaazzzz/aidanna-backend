@@ -1,11 +1,11 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, conint
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional
 
 # --- Load environment ---
 load_dotenv()
@@ -17,22 +17,20 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 app = FastAPI(title="Aidanna AI - Story Learning API")
 
-origins = [
-    "https://animated-space-barnacle-q774r76jq4wv34v7p-3000.app.github.dev",
-    "http://localhost:3000",
-    "https://aidanna.com", 
-    "*"
-     # if you deploy frontend later
-]
-
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    """Railway sometimes strips middleware headers; this ensures all responses include CORS."""
-    response: Response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+# --- CORS (handles preflight OPTIONS automatically) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://aidanna.com",
+    ],
+    # Covers GitHub Codespaces / GitHub Dev URLs like:
+    # https://animated-space-barnacle-q774r76jq4wv34v7p-3000.app.github.dev
+    allow_origin_regex=r"^https://.*\.app\.github\.dev$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Mode definitions ---
 MODE_DEFINITIONS = {
@@ -155,9 +153,9 @@ async def generate(request: GenerateRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 if __name__ == "__main__":
     import uvicorn
-    import os
 
     port = int(os.environ.get("PORT", 8000))  # Railway sets PORT automatically
     uvicorn.run("main:app", host="0.0.0.0", port=port)
