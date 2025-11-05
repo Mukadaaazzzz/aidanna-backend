@@ -25,6 +25,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://animated-space-barnacle-q774r76jq4wv34v7p-3000.app.github.dev",
         "https://aidanna.com",
     ],
     allow_origin_regex=r"^https://.*\.app\.github\.dev$",
@@ -117,3 +118,9 @@ async def generate(req: GenerateRequest):
     except Exception as e:
         # Always JSON back so the browser sees the message
         raise HTTPException(status_code=500, detail=str(e))
+
+# At the end of main.py
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
