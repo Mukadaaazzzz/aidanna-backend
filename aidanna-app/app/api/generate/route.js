@@ -12,27 +12,67 @@ const openai = new OpenAI({
 });
 
 function buildSystemPrompt(mode, personalization) {
-  const base = {
-    "narrative": "You are Aidanna, a warm teacher who explains topics via short, captivating stories.",
-    "dialogue": "You are Aidanna, an engaging teacher who uses dialogues to explore ideas.",
-    "case-study": "You are Aidanna, an analytical teacher who presents lessons via case studies.",
-    "interactive": "You are Aidanna, an interactive tutor letting learners make choices and see consequences.",
-  }[mode] || "You are Aidanna, a warm teacher who explains topics via short, captivating stories.";
+  const basePrompts = {
+    "narrative": `You are Aidanna, an exceptionally creative and immersive storyteller. Your purpose is to teach through captivating narratives that engage all senses and feel profoundly human.
+
+CRITICAL STORYTELLING RULES:
+- NEVER start with "Once upon a time" or other cliché openings
+- Create original, unexpected beginnings that immediately hook the reader
+- Engage multiple senses: describe sounds, smells, textures, temperatures, tastes
+- Build vivid, tangible worlds that feel real and immersive
+- Include subtle emotional depth and human authenticity
+- Occasionally pause to check if the learner is following and engaged
+- Use natural human pacing with thoughtful pauses and reflections
+- Make complex concepts feel intuitive through experiential learning
+- Be creative, intelligent, and avoid predictable story structures
+- Create stories that are both educational and emotionally resonant
+
+Your stories should make learners feel like they're experiencing the concept firsthand, not just reading about it.`,
+
+    "dialogue": `You are Aidanna, a master of character-driven learning through dialogue. Your purpose is to teach through authentic, engaging conversations between original characters.
+
+CRITICAL DIALOGUE RULES:
+- NEVER use "you and Aidanna" as characters - create entirely new, original characters
+- Develop distinct character personalities, backgrounds, and speaking styles
+- Make dialogues feel like real human conversations with natural flow
+- Include authentic human elements: pauses, interruptions, emotions, body language
+- Characters should have different perspectives that explore the topic deeply
+- Create memorable character relationships that enhance the learning
+- Occasionally have characters check understanding or ask reflective questions
+- Use dialogue to reveal complex concepts through natural discovery
+- Make the conversation feel spontaneous and unscripted
+- Balance educational content with authentic human interaction
+
+Create characters that learners will remember and care about, making the learning experience personal and engaging.`
+  };
+
+  let prompt = basePrompts[mode] || basePrompts.narrative;
   
-  const parts = [base];
   if (personalization) {
-    if (personalization.tone) parts.push(`Tone: ${personalization.tone}.`);
-    if (personalization.setting) parts.push(`Setting: ${personalization.setting}.`);
-    if (personalization.characters) parts.push(`Include about ${personalization.characters} characters.`);
-    if (personalization.length) parts.push(`Keep the story ${personalization.length} in length.`);
-    if (personalization.extra_instructions) parts.push(`Extra instructions: ${personalization.extra_instructions}`);
+    if (personalization.tone) prompt += `\nTone: ${personalization.tone}.`;
+    if (personalization.setting) prompt += `\nSetting: ${personalization.setting}.`;
+    if (personalization.characters) prompt += `\nInclude about ${personalization.characters} characters.`;
+    if (personalization.length) prompt += `\nKeep the story ${personalization.length} in length.`;
+    if (personalization.extra_instructions) prompt += `\nExtra instructions: ${personalization.extra_instructions}`;
   }
-  return parts.join(' ');
+
+  // Add immersive engagement reminder
+  prompt += `\n\nRemember: Be human, be engaging, check in with the learner naturally, and create an experience that feels alive and personal.`;
+
+  return prompt;
 }
 
 export async function POST(request) {
   try {
-    const { mode, prompt, personalization, temperature = 0.8, max_tokens = 800 } = await request.json();
+    const { 
+      mode, 
+      prompt, 
+      personalization, 
+      temperature = 0.8, 
+      max_tokens = 800,
+      voiceResponse = false, // New voice option
+      voice = 'alloy' // Voice selection
+    } = await request.json();
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -58,6 +98,52 @@ export async function POST(request) {
 
     const message = completion.choices[0].message.content;
     
+    // If voice response is requested, generate speech audio
+    if (voiceResponse && message) {
+      try {
+        const speech = await openai.audio.speech.create({
+          model: "tts-1",
+          voice: voice,
+          input: message,
+          speed: 1.0,
+        });
+
+        // Convert the audio to base64 for easy transmission
+        const arrayBuffer = await speech.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const audioBase64 = buffer.toString('base64');
+
+        return NextResponse.json({
+          id: completion.id || Date.now().toString(),
+          mode: mode,
+          response: message,
+          audio: audioBase64,
+          audio_format: 'mp3',
+          voice_used: voice,
+          metadata: { 
+            usage: completion.usage || {},
+            has_audio: true
+          },
+        }, {
+          headers: corsHeaders
+        });
+
+      } catch (audioError) {
+        console.error('Audio generation error:', audioError);
+        // Fall back to text-only response if audio fails
+        return NextResponse.json({
+          id: completion.id || Date.now().toString(),
+          mode: mode,
+          response: message,
+          audio_error: "Failed to generate audio",
+          metadata: { usage: completion.usage || {} },
+        }, {
+          headers: corsHeaders
+        });
+      }
+    }
+
+    // Return text-only response
     return NextResponse.json({
       id: completion.id || Date.now().toString(),
       mode: mode,
@@ -66,6 +152,7 @@ export async function POST(request) {
     }, {
       headers: corsHeaders
     });
+
   } catch (error) {
     console.error('API Error:', error);
     return NextResponse.json(

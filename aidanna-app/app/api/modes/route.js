@@ -7,10 +7,14 @@ const corsHeaders = {
 };
 
 const MODE_DEFINITIONS = {
-  "narrative": { "label": "Narrative", "description": "Teaches concepts through immersive stories." },
-  "dialogue": { "label": "Dialogue", "description": "Explains via character conversations." },
-  "case-study": { "label": "Case Study", "description": "Realistic scenario with outcomes and lessons." },
-  "interactive": { "label": "Interactive", "description": "Choice-based learning with consequences." },
+  "narrative": { 
+    "label": "Narrative", 
+    "description": "Learn through immersive, multi-sensory stories that engage your imagination and make concepts come alive." 
+  },
+  "dialogue": { 
+    "label": "Dialogue", 
+    "description": "Discover ideas through authentic conversations between original characters with unique personalities and perspectives." 
+  },
 };
 
 export async function GET() {
