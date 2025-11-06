@@ -98,9 +98,10 @@ export async function POST(request) {
 
     const message = completion.choices[0].message.content;
     
-    // If voice response is requested, generate speech audio
     if (voiceResponse && message) {
       try {
+        console.log('Generating audio with voice:', voice); // Debug log
+        
         const speech = await openai.audio.speech.create({
           model: "tts-1",
           voice: voice,
@@ -112,6 +113,8 @@ export async function POST(request) {
         const arrayBuffer = await speech.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
         const audioBase64 = buffer.toString('base64');
+
+        console.log('Audio generated successfully, length:', audioBase64.length); // Debug log
 
         return NextResponse.json({
           id: completion.id || Date.now().toString(),
@@ -135,7 +138,7 @@ export async function POST(request) {
           id: completion.id || Date.now().toString(),
           mode: mode,
           response: message,
-          audio_error: "Failed to generate audio",
+          audio_error: "Failed to generate audio: " + audioError.message,
           metadata: { usage: completion.usage || {} },
         }, {
           headers: corsHeaders
