@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
     // Generate speech using OpenAI TTS
     const mp3 = await openai.audio.speech.create({
-      model: "tts-1",
+      model: "gpt-4o-mini-tts",
       voice: selectedVoice as any,
       input: text,
       speed: 1.0, // Optional: control speech speed (0.25 to 4.0)
