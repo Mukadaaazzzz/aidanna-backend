@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { OpenAI } from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createClient } from '@supabase/supabase-js';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -7,9 +8,131 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const FREE_USER_LIMITS = {
+  MAX_REQUESTS_PER_DAY: 10,
+  MAX_TOKENS_PER_REQUEST: 4096,
+  MAX_HISTORY_MESSAGES: 20
+};
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+async function checkAndUpdateUsage(userId) {
+  const today = new Date().toISOString().split('T')[0];
+  
+  const { data: usage, error } = await supabase
+    .from('user_usage')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('date', today)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    throw new Error('Failed to check usage');
+  }
+
+  if (!usage) {
+    const { error: insertError } = await supabase
+      .from('user_usage')
+      .insert({ user_id: userId, date: today, request_count: 1 });
+    
+    if (insertError) throw new Error('Failed to create usage record');
+    
+    return {
+      allowed: true,
+      requests_used: 1,
+      requests_remaining: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY - 1
+    };
+  }
+
+  if (usage.request_count >= FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY) {
+    return {
+      allowed: false,
+      requests_used: usage.request_count,
+      requests_remaining: 0,
+      error: `Daily limit reached (${FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY} requests). Try again tomorrow!`
+    };
+  }
+
+  const { error: updateError } = await supabase
+    .from('user_usage')
+    .update({ request_count: usage.request_count + 1 })
+    .eq('user_id', userId)
+    .eq('date', today);
+
+  if (updateError) throw new Error('Failed to update usage');
+
+  return {
+    allowed: true,
+    requests_used: usage.request_count + 1,
+    requests_remaining: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY - usage.request_count - 1
+  };
+}
+
+async function getOrCreateConversation(userId, conversationId, mode) {
+  if (conversationId && conversationId !== 'new') {
+    const { data } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', conversationId)
+      .eq('user_id', userId)
+      .single();
+    
+    if (data) return data.id;
+  }
+
+  const { data, error } = await supabase
+    .from('conversations')
+    .insert({
+      user_id: userId,
+      mode: mode,
+      title: 'New Conversation'
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error('Failed to create conversation');
+  return data.id;
+}
+
+async function getConversationHistory(conversationId) {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('role, content')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .limit(FREE_USER_LIMITS.MAX_HISTORY_MESSAGES);
+
+  if (error) throw new Error('Failed to fetch history');
+  return data || [];
+}
+
+async function saveMessage(conversationId, role, content, audioBase64 = null) {
+  const { error } = await supabase
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      role: role,
+      content: content,
+      audio_base64: audioBase64
+    });
+
+  if (error) throw new Error('Failed to save message');
+}
+
+async function updateConversationTitle(conversationId, firstMessage) {
+  const title = firstMessage.slice(0, 50) + (firstMessage.length > 50 ? '...' : '');
+  
+  await supabase
+    .from('conversations')
+    .update({ 
+      title: title,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', conversationId);
+}
 
 function buildSystemPrompt(mode, personalization) {
   const basePrompts = {
@@ -56,7 +179,6 @@ Create characters that learners will remember and care about, making the learnin
     if (personalization.extra_instructions) prompt += `\nExtra instructions: ${personalization.extra_instructions}`;
   }
 
-  // Add immersive engagement reminder
   prompt += `\n\nRemember: Be human, be engaging, check in with the learner naturally, and create an experience that feels alive and personal.`;
 
   return prompt;
@@ -65,93 +187,118 @@ Create characters that learners will remember and care about, making the learnin
 export async function POST(request) {
   try {
     const { 
-      mode, 
       prompt, 
+      mode = 'narrative',
       personalization, 
       temperature = 0.8, 
-      max_tokens = 800,
-      voiceResponse = false, // New voice option
-      voice = 'alloy' // Voice selection
+      max_tokens = 4096,
+      conversationId = 'new',
+      userId
     } = await request.json();
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!userId) {
       return NextResponse.json(
-        { error: "OPENAI_API_KEY not configured on the server." },
-        { 
-          status: 500,
-          headers: corsHeaders
-        }
+        { error: "User ID is required" },
+        { status: 401, headers: corsHeaders }
       );
     }
 
-    const systemPrompt = buildSystemPrompt(mode, personalization);
-    
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt },
-      ],
-      temperature: temperature,
-      max_tokens: max_tokens,
-    });
-
-    const message = completion.choices[0].message.content;
-    
-    if (voiceResponse && message) {
-      try {
-        console.log('Generating audio with voice:', voice); // Debug log
-        
-        const speech = await openai.audio.speech.create({
-          model: "gpt-4o-mini-tts",
-          voice: voice,
-          input: message,
-          speed: 1.0,
-        });
-
-        // Convert the audio to base64 for easy transmission
-        const arrayBuffer = await speech.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const audioBase64 = buffer.toString('base64');
-
-        console.log('Audio generated successfully, length:', audioBase64.length); // Debug log
-
-        return NextResponse.json({
-          id: completion.id || Date.now().toString(),
-          mode: mode,
-          response: message,
-          audio: audioBase64,
-          audio_format: 'mp3',
-          voice_used: voice,
-          metadata: { 
-            usage: completion.usage || {},
-            has_audio: true
-          },
-        }, {
-          headers: corsHeaders
-        });
-
-      } catch (audioError) {
-        console.error('Audio generation error:', audioError);
-        // Fall back to text-only response if audio fails
-        return NextResponse.json({
-          id: completion.id || Date.now().toString(),
-          mode: mode,
-          response: message,
-          audio_error: "Failed to generate audio: " + audioError.message,
-          metadata: { usage: completion.usage || {} },
-        }, {
-          headers: corsHeaders
-        });
-      }
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json(
+        { error: "GEMINI_API_KEY not configured" },
+        { status: 500, headers: corsHeaders }
+      );
     }
 
-    // Return text-only response
+    const usageCheck = await checkAndUpdateUsage(userId);
+    
+    if (!usageCheck.allowed) {
+      return NextResponse.json(
+        { 
+          error: usageCheck.error,
+          limit_reached: true,
+          usage: {
+            requests_used: usageCheck.requests_used,
+            requests_remaining: usageCheck.requests_remaining,
+            daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY
+          }
+        },
+        { status: 429, headers: corsHeaders }
+      );
+    }
+
+    const finalConversationId = await getOrCreateConversation(userId, conversationId, mode);
+    
+    const history = await getConversationHistory(finalConversationId);
+    
+    await saveMessage(finalConversationId, 'user', prompt);
+
+    if (history.length === 0) {
+      await updateConversationTitle(finalConversationId, prompt);
+    }
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+
+    const systemPrompt = buildSystemPrompt(mode, personalization);
+    
+    let contents = [];
+    
+    if (history.length === 0) {
+      contents.push({ 
+        role: 'user', 
+        parts: [{ text: systemPrompt + '\n\nUser request: ' + prompt }] 
+      });
+    } else {
+      contents.push({ 
+        role: 'user', 
+        parts: [{ text: systemPrompt }] 
+      });
+      
+      history.forEach(msg => {
+        contents.push({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content }]
+        });
+      });
+      
+      contents.push({ 
+        role: 'user', 
+        parts: [{ text: prompt }] 
+      });
+    }
+    
+    const result = await model.generateContent({
+      contents: contents,
+      generationConfig: {
+        temperature: temperature,
+        maxOutputTokens: Math.min(max_tokens, FREE_USER_LIMITS.MAX_TOKENS_PER_REQUEST),
+      },
+    });
+
+    const response = await result.response;
+    const message = response.text();
+    
+    const finishReason = response.candidates[0]?.finishReason;
+    const wasTruncated = finishReason === 'MAX_TOKENS';
+
+    await saveMessage(finalConversationId, 'assistant', message);
+
     return NextResponse.json({
-      id: completion.id || Date.now().toString(),
+      id: Date.now().toString(),
+      conversation_id: finalConversationId,
       mode: mode,
       response: message,
-      metadata: { usage: completion.usage || {} },
+      metadata: { 
+        model: 'gemini-1.5-flash',
+        truncated: wasTruncated,
+        finish_reason: finishReason
+      },
+      usage: {
+        requests_used: usageCheck.requests_used,
+        requests_remaining: usageCheck.requests_remaining,
+        daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY
+      }
     }, {
       headers: corsHeaders
     });
@@ -160,10 +307,7 @@ export async function POST(request) {
     console.error('API Error:', error);
     return NextResponse.json(
       { error: error.message },
-      { 
-        status: 500,
-        headers: corsHeaders
-      }
+      { status: 500, headers: corsHeaders }
     );
   }
 }
