@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { OpenAI } from 'openai';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 function buildSystemPrompt(mode, personalization) {
   const basePrompts = {
@@ -52,6 +56,7 @@ Create characters that learners will remember and care about, making the learnin
     if (personalization.extra_instructions) prompt += `\nExtra instructions: ${personalization.extra_instructions}`;
   }
 
+  // Add immersive engagement reminder
   prompt += `\n\nRemember: Be human, be engaging, check in with the learner naturally, and create an experience that feels alive and personal.`;
 
   return prompt;
@@ -64,12 +69,14 @@ export async function POST(request) {
       prompt, 
       personalization, 
       temperature = 0.8, 
-      max_tokens = 800
+      max_tokens = 800,
+      voiceResponse = false, // New voice option
+      voice = 'alloy' // Voice selection
     } = await request.json();
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
-        { error: "GEMINI_API_KEY not configured on the server." },
+        { error: "OPENAI_API_KEY not configured on the server." },
         { 
           status: 500,
           headers: corsHeaders
@@ -77,30 +84,74 @@ export async function POST(request) {
       );
     }
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-
     const systemPrompt = buildSystemPrompt(mode, personalization);
-    const fullPrompt = `${systemPrompt}\n\nUser request: ${prompt}`;
     
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-      generationConfig: {
-        temperature: temperature,
-        maxOutputTokens: max_tokens,
-      },
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt },
+      ],
+      temperature: temperature,
+      max_tokens: max_tokens,
     });
 
-    const response = await result.response;
-    const message = response.text();
+    const message = completion.choices[0].message.content;
+    
+    if (voiceResponse && message) {
+      try {
+        console.log('Generating audio with voice:', voice); // Debug log
+        
+        const speech = await openai.audio.speech.create({
+          model: "gpt-4o-mini-tts",
+          voice: voice,
+          input: message,
+          speed: 1.0,
+        });
 
+        // Convert the audio to base64 for easy transmission
+        const arrayBuffer = await speech.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const audioBase64 = buffer.toString('base64');
+
+        console.log('Audio generated successfully, length:', audioBase64.length); // Debug log
+
+        return NextResponse.json({
+          id: completion.id || Date.now().toString(),
+          mode: mode,
+          response: message,
+          audio: audioBase64,
+          audio_format: 'mp3',
+          voice_used: voice,
+          metadata: { 
+            usage: completion.usage || {},
+            has_audio: true
+          },
+        }, {
+          headers: corsHeaders
+        });
+
+      } catch (audioError) {
+        console.error('Audio generation error:', audioError);
+        // Fall back to text-only response if audio fails
+        return NextResponse.json({
+          id: completion.id || Date.now().toString(),
+          mode: mode,
+          response: message,
+          audio_error: "Failed to generate audio: " + audioError.message,
+          metadata: { usage: completion.usage || {} },
+        }, {
+          headers: corsHeaders
+        });
+      }
+    }
+
+    // Return text-only response
     return NextResponse.json({
-      id: Date.now().toString(),
+      id: completion.id || Date.now().toString(),
       mode: mode,
       response: message,
-      metadata: { 
-        model: 'gemini-1.5-flash'
-      },
+      metadata: { usage: completion.usage || {} },
     }, {
       headers: corsHeaders
     });
