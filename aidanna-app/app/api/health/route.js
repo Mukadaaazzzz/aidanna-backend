@@ -22,4 +22,3 @@ export async function OPTIONS() {
     headers: corsHeaders
   });
 }
-gemini-2.5-flash-lite
