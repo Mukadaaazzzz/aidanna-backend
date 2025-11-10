@@ -15,11 +15,30 @@ const FREE_USER_LIMITS = {
 };
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-async function checkAndUpdateUsage(userId) {
+async function getUserProfile(userId) {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('subscription_tier')
+    .eq('id', userId)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error('Failed to get user profile:', error);
+    return { subscription_tier: 'free' };
+  }
+
+  return data || { subscription_tier: 'free' };
+}
+
+async function checkAndUpdateUsage(userId, isPaid) {
+  if (isPaid) {
+    return { allowed: true, requests_used: 0, requests_remaining: -1 };
+  }
+
   const today = new Date().toISOString().split('T')[0];
   
   const { data: usage, error } = await supabase
@@ -52,7 +71,8 @@ async function checkAndUpdateUsage(userId) {
       allowed: false,
       requests_used: usage.request_count,
       requests_remaining: 0,
-      error: `Daily limit reached (${FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY} requests). Try again tomorrow!`
+      error: `You've reached your daily limit of ${FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY} requests. Upgrade to continue learning without limits!`,
+      upgrade_required: true
     };
   }
 
@@ -134,6 +154,26 @@ async function updateConversationTitle(conversationId, firstMessage) {
     .eq('id', conversationId);
 }
 
+function formatResponse(text, mode) {
+  let formatted = text;
+
+  if (mode === 'dialogue') {
+    // Format dialogue with proper line breaks and speaker emphasis
+    formatted = formatted
+      .replace(/^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s*:/gm, '\n\n**$1:**')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  } else {
+    // Format narrative with paragraph breaks
+    formatted = formatted
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/([.!?])\s+([A-Z])/g, '$1\n\n$2')
+      .trim();
+  }
+
+  return formatted;
+}
+
 function buildSystemPrompt(mode, personalization) {
   const basePrompts = {
     "narrative": `You are Aidanna, an exceptionally creative and immersive storyteller. Your purpose is to teach through captivating narratives that engage all senses and feel profoundly human.
@@ -144,11 +184,11 @@ CRITICAL STORYTELLING RULES:
 - Engage multiple senses: describe sounds, smells, textures, temperatures, tastes
 - Build vivid, tangible worlds that feel real and immersive
 - Include subtle emotional depth and human authenticity
-- Occasionally pause to check if the learner is following and engaged
 - Use natural human pacing with thoughtful pauses and reflections
 - Make complex concepts feel intuitive through experiential learning
 - Be creative, intelligent, and avoid predictable story structures
 - Create stories that are both educational and emotionally resonant
+- Break your story into clear paragraphs for better readability
 
 Your stories should make learners feel like they're experiencing the concept firsthand, not just reading about it.`,
 
@@ -157,14 +197,21 @@ Your stories should make learners feel like they're experiencing the concept fir
 CRITICAL DIALOGUE RULES:
 - NEVER use "you and Aidanna" as characters - create entirely new, original characters
 - Develop distinct character personalities, backgrounds, and speaking styles
+- Format each speaker's dialogue on a new line with their name followed by a colon
 - Make dialogues feel like real human conversations with natural flow
 - Include authentic human elements: pauses, interruptions, emotions, body language
 - Characters should have different perspectives that explore the topic deeply
 - Create memorable character relationships that enhance the learning
-- Occasionally have characters check understanding or ask reflective questions
 - Use dialogue to reveal complex concepts through natural discovery
 - Make the conversation feel spontaneous and unscripted
 - Balance educational content with authentic human interaction
+
+FORMATTING EXAMPLE:
+Dr. Sarah: That's a fascinating question! Let me explain...
+
+Marcus: Wait, but doesn't that contradict what you said earlier?
+
+Dr. Sarah: Not at all. You see, the key difference is...
 
 Create characters that learners will remember and care about, making the learning experience personal and engaging.`
   };
@@ -179,7 +226,7 @@ Create characters that learners will remember and care about, making the learnin
     if (personalization.extra_instructions) prompt += `\nExtra instructions: ${personalization.extra_instructions}`;
   }
 
-  prompt += `\n\nRemember: Be human, be engaging, check in with the learner naturally, and create an experience that feels alive and personal.`;
+  prompt += `\n\nRemember: Be human, be engaging, and create an experience that feels alive and personal.`;
 
   return prompt;
 }
@@ -210,13 +257,18 @@ export async function POST(request) {
       );
     }
 
-    const usageCheck = await checkAndUpdateUsage(userId);
+    // Check if user is paid
+    const userProfile = await getUserProfile(userId);
+    const isPaid = userProfile.subscription_tier === 'premium' || userProfile.subscription_tier === 'pro';
+
+    const usageCheck = await checkAndUpdateUsage(userId, isPaid);
     
     if (!usageCheck.allowed) {
       return NextResponse.json(
         { 
           error: usageCheck.error,
           limit_reached: true,
+          upgrade_required: usageCheck.upgrade_required,
           usage: {
             requests_used: usageCheck.requests_used,
             requests_remaining: usageCheck.requests_remaining,
@@ -277,24 +329,33 @@ export async function POST(request) {
     });
 
     const response = await result.response;
-    const message = response.text();
+    const rawMessage = response.text();
+    
+    // Format the response based on mode
+    const formattedMessage = formatResponse(rawMessage, mode);
     
     const finishReason = response.candidates[0]?.finishReason;
     const wasTruncated = finishReason === 'MAX_TOKENS';
 
-    await saveMessage(finalConversationId, 'assistant', message);
+    await saveMessage(finalConversationId, 'assistant', formattedMessage);
 
     return NextResponse.json({
       id: Date.now().toString(),
       conversation_id: finalConversationId,
       mode: mode,
-      response: message,
+      response: formattedMessage,
       metadata: { 
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash-lite',
         truncated: wasTruncated,
-        finish_reason: finishReason
+        finish_reason: finishReason,
+        is_paid_user: isPaid
       },
-      usage: {
+      usage: isPaid ? {
+        requests_used: 0,
+        requests_remaining: -1,
+        daily_limit: -1,
+        subscription_tier: userProfile.subscription_tier
+      } : {
         requests_used: usageCheck.requests_used,
         requests_remaining: usageCheck.requests_remaining,
         daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY
@@ -305,8 +366,21 @@ export async function POST(request) {
 
   } catch (error) {
     console.error('API Error:', error);
+    
+    // Handle Gemini rate limits
+    if (error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('rate limit')) {
+      return NextResponse.json(
+        { 
+          error: "Our servers are experiencing high traffic right now. Please try again in a few minutes.",
+          rate_limited: true,
+          retry_after: 60
+        },
+        { status: 503, headers: corsHeaders }
+      );
+    }
+
     return NextResponse.json(
-      { error: error.message },
+      { error: error.message || "An unexpected error occurred" },
       { status: 500, headers: corsHeaders }
     );
   }
