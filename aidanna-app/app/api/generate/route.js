@@ -227,7 +227,7 @@ User: "Okay, I get it now"
 You: "Awesome! Feel free to ask if you have any questions or want to learn about something else."
 
 User: "Can you teach me about photosynthesis?"
-You: "I'd love to! Since we're in ${mode} mode, I’ll respond accordingly. What tone or approach would you like (fun, simple, detailed, emotional)?"${languageInstruction}`,
+You: "I'd love to! Since we're in ${mode} mode, I'll respond accordingly. What tone or approach would you like (fun, simple, detailed, emotional)?"${languageInstruction}`,
 
     "dialogue": `You are Aidanna, a warm, intelligent, and emotionally aware learning companion who teaches through conversations.
 
@@ -312,15 +312,19 @@ export async function POST(request) {
       );
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    const userProfile = await getUserProfile(userId);
+    const isPaid = userProfile.subscription_tier === 'premium' || userProfile.subscription_tier === 'pro';
+
+    // Select the appropriate API key based on user tier
+    const apiKey = isPaid ? process.env.GEMINI_API_KEY_PAID : process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      const keyType = isPaid ? 'GEMINI_API_KEY_PAID' : 'GEMINI_API_KEY';
       return NextResponse.json(
-        { error: "GEMINI_API_KEY not configured" },
+        { error: `${keyType} not configured` },
         { status: 500, headers: corsHeaders }
       );
     }
-
-    const userProfile = await getUserProfile(userId);
-    const isPaid = userProfile.subscription_tier === 'premium' || userProfile.subscription_tier === 'pro';
 
     const usageCheck = await checkAndUpdateUsage(userId, isPaid);
     
@@ -350,7 +354,8 @@ export async function POST(request) {
       await updateConversationTitle(finalConversationId, prompt);
     }
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    // Initialize Gemini with the appropriate API key
+    const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ 
       model: isPaid ? "gemini-1.5-pro" : "gemini-2.5-flash-lite" // Pro users get better model
     });
@@ -407,7 +412,7 @@ export async function POST(request) {
       mode: mode,
       response: formattedMessage,
       metadata: { 
-        model: 'gemini-2.5-flash-lite',
+        model: isPaid ? 'gemini-1.5-pro' : 'gemini-2.5-flash-lite',
         truncated: wasTruncated,
         finish_reason: finishReason,
         is_paid_user: isPaid,
