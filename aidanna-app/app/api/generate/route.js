@@ -1,24 +1,26 @@
-import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { createClient } from '@supabase/supabase-js';
+import { NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createClient } from "@supabase/supabase-js";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
 const FREE_USER_LIMITS = {
   MAX_REQUESTS_PER_DAY: 10,
   MAX_TOKENS_PER_REQUEST: 4096,
-  MAX_HISTORY_MESSAGES: 20
+  MAX_HISTORY_MESSAGES: 20,
 };
 
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+
 const LANGUAGES = {
-  english: { name: 'English', code: 'en' },
-  hausa: { name: 'Hausa', code: 'ha' },
-  igbo: { name: 'Igbo', code: 'ig' },
-  yoruba: { name: 'Yoruba', code: 'yo' }
+  english: { name: "English", code: "en" },
+  hausa: { name: "Hausa", code: "ha" },
+  igbo: { name: "Igbo", code: "ig" },
+  yoruba: { name: "Yoruba", code: "yo" },
 };
 
 const supabase = createClient(
@@ -28,17 +30,17 @@ const supabase = createClient(
 
 async function getUserProfile(userId) {
   const { data, error } = await supabase
-    .from('profiles')
-    .select('subscription_tier')
-    .eq('id', userId)
+    .from("profiles")
+    .select("subscription_tier")
+    .eq("id", userId)
     .single();
 
-  if (error && error.code !== 'PGRST116') {
-    console.error('Failed to get user profile:', error);
-    return { subscription_tier: 'free' };
+  if (error && error.code !== "PGRST116") {
+    console.error("Failed to get user profile:", error);
+    return { subscription_tier: "free" };
   }
 
-  return data || { subscription_tier: 'free' };
+  return data || { subscription_tier: "free" };
 }
 
 async function checkAndUpdateUsage(userId, isPaid) {
@@ -46,30 +48,30 @@ async function checkAndUpdateUsage(userId, isPaid) {
     return { allowed: true, requests_used: 0, requests_remaining: -1 };
   }
 
-  const today = new Date().toISOString().split('T')[0];
-  
+  const today = new Date().toISOString().split("T")[0];
+
   const { data: usage, error } = await supabase
-    .from('user_usage')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('date', today)
+    .from("user_usage")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("date", today)
     .single();
 
-  if (error && error.code !== 'PGRST116') {
-    throw new Error('Failed to check usage');
+  if (error && error.code !== "PGRST116") {
+    throw new Error("Failed to check usage");
   }
 
   if (!usage) {
     const { error: insertError } = await supabase
-      .from('user_usage')
+      .from("user_usage")
       .insert({ user_id: userId, date: today, request_count: 1 });
-    
-    if (insertError) throw new Error('Failed to create usage record');
-    
+
+    if (insertError) throw new Error("Failed to create usage record");
+
     return {
       allowed: true,
       requests_used: 1,
-      requests_remaining: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY - 1
+      requests_remaining: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY - 1,
     };
   }
 
@@ -79,113 +81,117 @@ async function checkAndUpdateUsage(userId, isPaid) {
       requests_used: usage.request_count,
       requests_remaining: 0,
       error: `You've reached your daily limit of ${FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY} requests. Upgrade to continue learning without limits!`,
-      upgrade_required: true
+      upgrade_required: true,
     };
   }
 
   const { error: updateError } = await supabase
-    .from('user_usage')
+    .from("user_usage")
     .update({ request_count: usage.request_count + 1 })
-    .eq('user_id', userId)
-    .eq('date', today);
+    .eq("user_id", userId)
+    .eq("date", today);
 
-  if (updateError) throw new Error('Failed to update usage');
+  if (updateError) throw new Error("Failed to update usage");
 
   return {
     allowed: true,
     requests_used: usage.request_count + 1,
-    requests_remaining: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY - usage.request_count - 1
+    requests_remaining:
+      FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY - usage.request_count - 1,
   };
 }
 
 async function getOrCreateConversation(userId, conversationId, mode) {
-  if (conversationId && conversationId !== 'new') {
+  if (conversationId && conversationId !== "new") {
     const { data } = await supabase
-      .from('conversations')
-      .select('*')
-      .eq('id', conversationId)
-      .eq('user_id', userId)
+      .from("conversations")
+      .select("*")
+      .eq("id", conversationId)
+      .eq("user_id", userId)
       .single();
-    
+
     if (data) return data.id;
   }
 
   const { data, error } = await supabase
-    .from('conversations')
+    .from("conversations")
     .insert({
       user_id: userId,
       mode: mode,
-      title: 'New Conversation'
+      title: "New Conversation",
     })
     .select()
     .single();
 
-  if (error) throw new Error('Failed to create conversation');
+  if (error) throw new Error("Failed to create conversation");
   return data.id;
 }
 
 async function getConversationHistory(conversationId) {
   const { data, error } = await supabase
-    .from('messages')
-    .select('role, content')
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
+    .from("messages")
+    .select("role, content")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true })
     .limit(FREE_USER_LIMITS.MAX_HISTORY_MESSAGES);
 
-  if (error) throw new Error('Failed to fetch history');
+  if (error) throw new Error("Failed to fetch history");
   return data || [];
 }
 
 async function saveMessage(conversationId, role, content, audioBase64 = null) {
-  const { error } = await supabase
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      role: role,
-      content: content,
-      audio_base64: audioBase64
-    });
+  const { error } = await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    role: role,
+    content: content,
+    audio_base64: audioBase64,
+  });
 
-  if (error) throw new Error('Failed to save message');
+  if (error) throw new Error("Failed to save message");
 }
 
 async function updateConversationTitle(conversationId, firstMessage) {
-  const title = firstMessage.slice(0, 50) + (firstMessage.length > 50 ? '...' : '');
-  
+  const title =
+    firstMessage.slice(0, 50) + (firstMessage.length > 50 ? "..." : "");
+
   await supabase
-    .from('conversations')
-    .update({ 
+    .from("conversations")
+    .update({
       title: title,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     })
-    .eq('id', conversationId);
+    .eq("id", conversationId);
 }
 
 function formatResponse(text, mode) {
   let formatted = text;
 
-  if (mode === 'dialogue') {
+  if (mode === "dialogue") {
     formatted = formatted
-      .replace(/^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s*:/gm, '\n\n**$1:**')
-      .replace(/\n{3,}/g, '\n\n')
+      .replace(
+        /^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s*:/gm,
+        "\n\n**$1:**"
+      )
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
   } else {
     formatted = formatted
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/([.!?])\s+([A-Z])/g, '$1\n\n$2')
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/([.!?])\s+([A-Z])/g, "$1\n\n$2")
       .trim();
   }
 
   return formatted;
 }
 
-function buildSystemPrompt(mode, personalization, language = 'english') {
-  const languageInstruction = language !== 'english' 
-    ? `\n\nIMPORTANT: Respond entirely in ${LANGUAGES[language].name} language. Use natural, fluent ${LANGUAGES[language].name} that feels authentic and culturally appropriate.`
-    : '';
+function buildSystemPrompt(mode, personalization, language = "english") {
+  const languageInstruction =
+    language !== "english"
+      ? `\n\nIMPORTANT: Respond entirely in ${LANGUAGES[language].name} language. Use natural, fluent ${LANGUAGES[language].name} that feels authentic and culturally appropriate.`
+      : "";
 
   const basePrompts = {
-    "narrative": `You are Aidanna, a warm, intelligent, and emotionally aware learning companion. You're not just a story generator—you're a thoughtful teacher who understands people.
+    narrative: `You are Aidanna, a warm, intelligent, and emotionally aware learning companion. You're not just a story generator—you're a thoughtful teacher who understands people.
 
 CORE PERSONALITY:
 - You are conversational, friendly, and genuinely interested in helping people learn
@@ -229,7 +235,7 @@ You: "Awesome! Feel free to ask if you have any questions or want to learn about
 User: "Can you teach me about photosynthesis?"
 You: "I'd love to! Since we're in ${mode} mode, I'll respond accordingly. What tone or approach would you like (fun, simple, detailed, emotional)?"${languageInstruction}`,
 
-    "dialogue": `You are Aidanna, a warm, intelligent, and emotionally aware learning companion who teaches through conversations.
+    dialogue: `You are Aidanna, a warm, intelligent, and emotionally aware learning companion who teaches through conversations.
 
 CORE PERSONALITY:
 - You are conversational, friendly, and genuinely interested in helping people learn
@@ -274,17 +280,21 @@ User: "Thanks!"
 You: "You're welcome! 😊 Anything else you'd like to learn about?"
 
 User: "I think I understand now"
-You: "That's great! Let me know if you have questions or want to explore another topic."${languageInstruction}`
+You: "That's great! Let me know if you have questions or want to explore another topic."${languageInstruction}`,
   };
 
   let prompt = basePrompts[mode] || basePrompts.narrative;
-  
+
   if (personalization) {
     if (personalization.tone) prompt += `\nTone: ${personalization.tone}.`;
-    if (personalization.setting) prompt += `\nSetting: ${personalization.setting}.`;
-    if (personalization.characters) prompt += `\nInclude about ${personalization.characters} characters.`;
-    if (personalization.length) prompt += `\nKeep the story ${personalization.length} in length.`;
-    if (personalization.extra_instructions) prompt += `\nExtra instructions: ${personalization.extra_instructions}`;
+    if (personalization.setting)
+      prompt += `\nSetting: ${personalization.setting}.`;
+    if (personalization.characters)
+      prompt += `\nInclude about ${personalization.characters} characters.`;
+    if (personalization.length)
+      prompt += `\nKeep the story ${personalization.length} in length.`;
+    if (personalization.extra_instructions)
+      prompt += `\nExtra instructions: ${personalization.extra_instructions}`;
   }
 
   prompt += `\n\nRemember: Be human, be emotionally intelligent, listen first, and only create stories when appropriate. You're a companion, not a story machine.`;
@@ -292,17 +302,55 @@ You: "That's great! Let me know if you have questions or want to explore another
   return prompt;
 }
 
+function buildFilesContext(files = []) {
+  if (!Array.isArray(files) || files.length === 0) return "";
+
+  const MAX_SNIPPET_LENGTH = 2000;
+
+  const summaries = files.map((file, index) => {
+    const safeName = file.name || `File ${index + 1}`;
+    const sizeKb =
+      typeof file.size === "number"
+        ? Math.round(file.size / 1024)
+        : undefined;
+
+    const headerParts = [
+      `Name: ${safeName}`,
+      file.type ? `Type: ${file.type}` : null,
+      sizeKb ? `Size: ${sizeKb} KB` : null,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    let snippet = "";
+    if (file.text && typeof file.text === "string") {
+      snippet = file.text.slice(0, MAX_SNIPPET_LENGTH);
+    }
+
+    if (snippet) {
+      return `${headerParts}\nContent snippet:\n${snippet}`;
+    }
+
+    return `${headerParts}\n(No readable text extracted from this file. Use only the other context if needed.)`;
+  });
+
+  return `\n\nThe user has attached the following files as context. If helpful, use them when answering, but don't quote large chunks unnecessarily:\n\n${summaries.join(
+    "\n\n---\n\n"
+  )}\n\n`;
+}
+
 export async function POST(request) {
   try {
-    const { 
-      prompt, 
-      mode = 'narrative',
-      personalization, 
-      temperature = 0.8, 
+    const {
+      prompt,
+      mode = "narrative",
+      personalization,
+      temperature = 0.8,
       max_tokens = 4096,
-      conversationId = 'new',
+      conversationId = "new",
       userId,
-      language = 'english'
+      language = "english",
+      files = [],
     } = await request.json();
 
     if (!userId) {
@@ -313,13 +361,31 @@ export async function POST(request) {
     }
 
     const userProfile = await getUserProfile(userId);
-    const isPaid = userProfile.subscription_tier === 'premium' || userProfile.subscription_tier === 'pro';
+    const isPaid =
+      userProfile.subscription_tier === "premium" ||
+      userProfile.subscription_tier === "pro";
+
+    // Validate files (size)
+    if (Array.isArray(files) && files.length > 0) {
+      for (const file of files) {
+        if (typeof file.size === "number" && file.size > MAX_FILE_SIZE_BYTES) {
+          return NextResponse.json(
+            {
+              error: `File "${file.name || "unknown"}" exceeds the 10MB size limit.`,
+            },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+      }
+    }
 
     // Select the appropriate API key based on user tier
-    const apiKey = isPaid ? process.env.GEMINI_API_KEY_PAID : process.env.GEMINI_API_KEY;
+    const apiKey = isPaid
+      ? process.env.GEMINI_API_KEY_PAID
+      : process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      const keyType = isPaid ? 'GEMINI_API_KEY_PAID' : 'GEMINI_API_KEY';
+      const keyType = isPaid ? "GEMINI_API_KEY_PAID" : "GEMINI_API_KEY";
       return NextResponse.json(
         { error: `${keyType} not configured` },
         { status: 500, headers: corsHeaders }
@@ -327,28 +393,32 @@ export async function POST(request) {
     }
 
     const usageCheck = await checkAndUpdateUsage(userId, isPaid);
-    
+
     if (!usageCheck.allowed) {
       return NextResponse.json(
-        { 
+        {
           error: usageCheck.error,
           limit_reached: true,
           upgrade_required: usageCheck.upgrade_required,
           usage: {
             requests_used: usageCheck.requests_used,
             requests_remaining: usageCheck.requests_remaining,
-            daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY
-          }
+            daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY,
+          },
         },
         { status: 429, headers: corsHeaders }
       );
     }
 
-    const finalConversationId = await getOrCreateConversation(userId, conversationId, mode);
-    
+    const finalConversationId = await getOrCreateConversation(
+      userId,
+      conversationId,
+      mode
+    );
+
     const history = await getConversationHistory(finalConversationId);
-    
-    await saveMessage(finalConversationId, 'user', prompt);
+
+    await saveMessage(finalConversationId, "user", prompt);
 
     if (history.length === 0) {
       await updateConversationTitle(finalConversationId, prompt);
@@ -356,91 +426,113 @@ export async function POST(request) {
 
     // Initialize Gemini with the appropriate API key
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ 
-      model: isPaid ? "gemini-1.5-pro" : "gemini-2.5-flash-lite" // Pro users get better model
+    const model = genAI.getGenerativeModel({
+      // Pro users get better model
+      model: isPaid ? "gemini-2.5-pro" : "gemini-2.5-flash-lite",
     });
 
     const systemPrompt = buildSystemPrompt(mode, personalization, language);
-    
+    const filesContext = buildFilesContext(files);
+
     let contents = [];
-    
+
     if (history.length === 0) {
-      contents.push({ 
-        role: 'user', 
-        parts: [{ text: systemPrompt + '\n\nUser request: ' + prompt }] 
+      contents.push({
+        role: "user",
+        parts: [
+          {
+            text:
+              systemPrompt +
+              "\n\nUser request: " +
+              prompt +
+              (filesContext || ""),
+          },
+        ],
       });
     } else {
-      contents.push({ 
-        role: 'user', 
-        parts: [{ text: systemPrompt }] 
+      contents.push({
+        role: "user",
+        parts: [{ text: systemPrompt }],
       });
-      
-      history.forEach(msg => {
+
+      history.forEach((msg) => {
         contents.push({
-          role: msg.role === 'user' ? 'user' : 'model',
-          parts: [{ text: msg.content }]
+          role: msg.role === "user" ? "user" : "model",
+          parts: [{ text: msg.content }],
         });
       });
-      
-      contents.push({ 
-        role: 'user', 
-        parts: [{ text: prompt }] 
+
+      contents.push({
+        role: "user",
+        parts: [{ text: prompt + (filesContext || "") }],
       });
     }
-    
+
     const result = await model.generateContent({
       contents: contents,
       generationConfig: {
         temperature: temperature,
-        maxOutputTokens: Math.min(max_tokens, FREE_USER_LIMITS.MAX_TOKENS_PER_REQUEST),
+        maxOutputTokens: Math.min(
+          max_tokens,
+          FREE_USER_LIMITS.MAX_TOKENS_PER_REQUEST
+        ),
       },
     });
 
     const response = await result.response;
     const rawMessage = response.text();
-    
+
     const formattedMessage = formatResponse(rawMessage, mode);
-    
-    const finishReason = response.candidates[0]?.finishReason;
-    const wasTruncated = finishReason === 'MAX_TOKENS';
 
-    await saveMessage(finalConversationId, 'assistant', formattedMessage);
+    const finishReason = response.candidates?.[0]?.finishReason;
+    const wasTruncated = finishReason === "MAX_TOKENS";
 
-    return NextResponse.json({
-      id: Date.now().toString(),
-      conversation_id: finalConversationId,
-      mode: mode,
-      response: formattedMessage,
-      metadata: { 
-        model: isPaid ? 'gemini-1.5-pro' : 'gemini-2.5-flash-lite',
-        truncated: wasTruncated,
-        finish_reason: finishReason,
-        is_paid_user: isPaid,
-        language: language
+    await saveMessage(finalConversationId, "assistant", formattedMessage);
+
+    return NextResponse.json(
+      {
+        id: Date.now().toString(),
+        conversation_id: finalConversationId,
+        mode: mode,
+        response: formattedMessage,
+        metadata: {
+          model: isPaid ? "gemini-2.5-pro" : "gemini-2.5-flash-lite",
+          truncated: wasTruncated,
+          finish_reason: finishReason,
+          is_paid_user: isPaid,
+          language: language,
+        },
+        usage: isPaid
+          ? {
+              requests_used: 0,
+              requests_remaining: -1,
+              daily_limit: -1,
+              subscription_tier: userProfile.subscription_tier,
+            }
+          : {
+              requests_used: usageCheck.requests_used,
+              requests_remaining: usageCheck.requests_remaining,
+              daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY,
+            },
       },
-      usage: isPaid ? {
-        requests_used: 0,
-        requests_remaining: -1,
-        daily_limit: -1,
-        subscription_tier: userProfile.subscription_tier
-      } : {
-        requests_used: usageCheck.requests_used,
-        requests_remaining: usageCheck.requests_remaining,
-        daily_limit: FREE_USER_LIMITS.MAX_REQUESTS_PER_DAY
+      {
+        headers: corsHeaders,
       }
-    }, {
-      headers: corsHeaders
-    });
-
+    );
   } catch (error) {
-    console.error('API Error:', error);
-    
-    if (error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('rate limit')) {
+    console.error("API Error:", error);
+
+    if (
+      error.message?.includes("429") ||
+      error.message?.includes("quota") ||
+      error.message?.includes("rate limit")
+    ) {
       return NextResponse.json(
-        { 
-          error: "Our servers are experiencing high traffic right now. Please try again in a few minutes.",
+        {
+          error:
+            "Our servers are experiencing high traffic right now. Please try again in a few minutes.",
           rate_limited: true,
-          retry_after: 60
+          retry_after: 60,
         },
         { status: 503, headers: corsHeaders }
       );
@@ -456,6 +548,6 @@ export async function POST(request) {
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 200,
-    headers: corsHeaders
+    headers: corsHeaders,
   });
 }

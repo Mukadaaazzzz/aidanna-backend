@@ -1,0 +1,12 @@
+{
+  // Keep Node/TS behavior for the rest of the app
+  "deno.enable": false,
+
+  // Enable Deno ONLY inside supabase/functions
+  "deno.enablePaths": [
+    "supabase/functions"
+  ],
+
+  // Edge Functions need some unstable APIs occasionally
+  "deno.unstable": true
+}
